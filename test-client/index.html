@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deta Infra — Test Console</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <span class="brand-icon">◆</span>
+          <span class="brand-name">Deta Infra</span>
+          <span class="badge">Test Console</span>
+        </div>
+        <div class="connection">
+          <span id="connDot" class="dot dot-pending"></span>
+          <span id="connLabel" class="conn-label">Checking…</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+
+      <!-- Config -->
+      <details class="card" open>
+        <summary class="card-title">Configuration</summary>
+        <div class="card-body">
+          <div class="field">
+            <label for="backendUrl">Backend URL</label>
+            <input id="backendUrl" type="text" value="http://localhost:5050" />
+          </div>
+          <div class="field">
+            <label for="googleClientId">Google Client ID</label>
+            <input id="googleClientId" type="text" placeholder="Not needed for Dev Bypass — only required for Google Auth" />
+          </div>
+          <div class="field-row">
+            <button id="initGoogleBtn" type="button">Initialize Google</button>
+            <span class="hint">Must match the backend <code>GOOGLE_CLIENT_ID</code> env var.</span>
+          </div>
+        </div>
+      </details>
+
+      <!-- Two-column action area -->
+      <div class="row">
+        <!-- Google auth -->
+        <section class="card half">
+          <div class="card-title">Google Auth</div>
+          <div class="card-body">
+            <div id="googleBtnWrap"></div>
+            <button id="startBtn" type="button" class="btn-secondary">Manual prompt</button>
+          </div>
+        </section>
+
+        <!-- Dev bypass -->
+        <section class="card half dev-card">
+          <div class="card-title">Dev Bypass</div>
+          <div class="card-body">
+            <p class="hint">Skip Google — creates a dev identity and provisions a wallet directly.</p>
+            <button id="devCreateBtn" type="button">Create Wallet</button>
+          </div>
+        </section>
+      </div>
+
+      <!-- Output -->
+      <section class="card">
+        <div class="card-title">Output</div>
+        <div class="card-body">
+          <div class="toolbar">
+            <button id="copyAllBtn" type="button" class="btn-sm">Copy addresses</button>
+            <button id="resetBtn" type="button" class="btn-sm btn-ghost">Reset</button>
+          </div>
+          <pre id="status" class="status">Idle — choose an auth method above to start.</pre>
+          <div id="addresses" class="addresses"></div>
+        </div>
+      </section>
+
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
