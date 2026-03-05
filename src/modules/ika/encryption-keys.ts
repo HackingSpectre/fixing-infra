@@ -17,6 +17,7 @@ import { logger } from "../../config/logger";
 import {
   getErrorMessage,
   isTransientNetworkFetchError,
+  extractErrorChain,
 } from "./errors";
 
 // ---------------------------------------------------------------------------
@@ -135,6 +136,7 @@ export async function fetchLatestEncryptionKeyResilient(
         is429,
         error: getErrorMessage(error),
         cause: error instanceof Error && error.cause ? getErrorMessage(error.cause) : undefined,
+        errorChain: extractErrorChain(error),
       });
 
       if (!isTransientNetworkFetchError(error) || attempt === maxAttempts) {
@@ -166,6 +168,7 @@ export async function fetchLatestEncryptionKeyResilient(
         method: "getAllNetworkEncryptionKeys",
         error: getErrorMessage(error),
         cause: error instanceof Error && error.cause ? getErrorMessage(error.cause) : undefined,
+        errorChain: extractErrorChain(error),
       });
 
       if (!isTransientNetworkFetchError(error) || attempt === maxAttempts) {

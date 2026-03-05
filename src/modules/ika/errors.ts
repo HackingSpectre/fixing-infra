@@ -40,6 +40,77 @@ export function getErrorWithCause(error: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
+// Deep error chain extraction (diagnostic logging)
+// ---------------------------------------------------------------------------
+
+/**
+ * Walk the full `.cause` chain and extract a structured object suitable
+ * for JSON logging.  The IKA SDK wraps errors multiple levels deep:
+ *
+ *   NetworkError('Failed to fetch encryption keys')
+ *     → cause: TypeError('fetch failed')
+ *       → cause: Error('connect ECONNREFUSED …')
+ *
+ * This helper unrolls the whole chain so logs show the **root cause**
+ * without needing a debugger.
+ */
+export function extractErrorChain(error: unknown): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+
+  if (!(error instanceof Error)) {
+    result.raw = String(error);
+    return result;
+  }
+
+  result.name = error.name;
+  result.message = error.message;
+
+  // Capture common HTTP-ish properties that SDK / fetch errors may carry.
+  const anyErr = error as unknown as Record<string, unknown>;
+  if (anyErr.status !== undefined) result.status = anyErr.status;
+  if (anyErr.statusCode !== undefined) result.statusCode = anyErr.statusCode;
+  if (anyErr.code !== undefined) result.code = anyErr.code;
+  if (anyErr.errno !== undefined) result.errno = anyErr.errno;
+  if (anyErr.syscall !== undefined) result.syscall = anyErr.syscall;
+  if (anyErr.address !== undefined) result.address = anyErr.address;
+  if (anyErr.port !== undefined) result.port = anyErr.port;
+
+  // Walk the cause chain (max 5 levels to prevent infinite loops).
+  let current: unknown = error.cause;
+  const causes: Record<string, unknown>[] = [];
+  let depth = 0;
+
+  while (current && depth < 5) {
+    if (current instanceof Error) {
+      const causeEntry: Record<string, unknown> = {
+        name: current.name,
+        message: current.message,
+      };
+      const anyCause = current as unknown as Record<string, unknown>;
+      if (anyCause.status !== undefined) causeEntry.status = anyCause.status;
+      if (anyCause.statusCode !== undefined) causeEntry.statusCode = anyCause.statusCode;
+      if (anyCause.code !== undefined) causeEntry.code = anyCause.code;
+      if (anyCause.errno !== undefined) causeEntry.errno = anyCause.errno;
+      if (anyCause.syscall !== undefined) causeEntry.syscall = anyCause.syscall;
+      if (anyCause.address !== undefined) causeEntry.address = anyCause.address;
+      if (anyCause.port !== undefined) causeEntry.port = anyCause.port;
+      causes.push(causeEntry);
+      current = current.cause;
+    } else {
+      causes.push({ raw: String(current) });
+      break;
+    }
+    depth += 1;
+  }
+
+  if (causes.length > 0) {
+    result.causes = causes;
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Error classification predicates
 // ---------------------------------------------------------------------------
 

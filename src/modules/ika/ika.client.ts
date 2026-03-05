@@ -16,7 +16,7 @@
 
 import { env } from "../../config/env";
 import { logger } from "../../config/logger";
-import { getErrorMessage, isTransientNetworkFetchError } from "./errors";
+import { getErrorMessage, isTransientNetworkFetchError, extractErrorChain } from "./errors";
 import { getRpcCandidates } from "./rpc";
 
 // ---------------------------------------------------------------------------
@@ -111,6 +111,11 @@ export async function getInitializedIkaClientContext(options?: {
             network: env.IKA_NETWORK,
           });
 
+          // Cooldown after init — the SDK's initialize() already made
+          // several RPC calls (getObjects, listDynamicFields × 2, getObjects).
+          // Jumping straight into warm-up causes a burst that triggers 429.
+          await sleep(3_000);
+
           // Pre-warm encryption keys + protocol params for both curves.
           // This populates the SDK's internal caches so the first DKG
           // flow reads from memory instead of making live RPC calls.
@@ -124,6 +129,7 @@ export async function getInitializedIkaClientContext(options?: {
             network: env.IKA_NETWORK,
             initAttempt,
             error: error instanceof Error ? error.message : String(error),
+            errorChain: extractErrorChain(error),
           });
 
           if (isTransientNetworkFetchError(error) && initAttempt < INIT_ATTEMPTS_PER_RPC) {
@@ -170,7 +176,31 @@ export async function warmUpSdkCaches(ikaClient: any): Promise<void> {
   try {
     // Step 1: Fetch and cache all encryption keys via the cache-respecting
     // path (getAllNetworkEncryptionKeys checks cachedEncryptionKeys first).
-    const keys = await ikaClient.getAllNetworkEncryptionKeys();
+    // Retry up to 3 times with increasing backoff if we hit 429.
+    let keys: any[] | null = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        keys = await ikaClient.getAllNetworkEncryptionKeys();
+        break;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const is429 = msg.includes("429") || msg.includes("Too Many Requests");
+        logger.warn("ika_cache_warmup_encryption_keys_attempt_failed", {
+          attempt,
+          is429,
+          error: msg,
+          errorChain: extractErrorChain(err),
+        });
+        if (attempt === 3 || !is429) throw err;
+        // Increasing backoff: 4s, 8s
+        await sleep(4_000 * attempt);
+        // Clear the SDK's failed promise so the next call retries
+        if (typeof ikaClient.invalidateEncryptionKeyCache === "function") {
+          ikaClient.invalidateEncryptionKeyCache();
+        }
+      }
+    }
+
     const keyCount = Array.isArray(keys) ? keys.length : 0;
     logger.info("ika_cache_warmup_encryption_keys_done", { keyCount });
 
@@ -186,10 +216,9 @@ export async function warmUpSdkCaches(ikaClient: any): Promise<void> {
       for (let i = 0; i < curves.length; i += 1) {
         const curve = curves[i];
         try {
-          // Delay between curves to avoid 429 during warm-up.
-          if (i > 0) {
-            await sleep(2_000);
-          }
+          // Delay before EVERY curve (including the first) — the encryption
+          // key fetch above already made many RPC calls.
+          await sleep(3_000);
           await ikaClient.getProtocolPublicParameters(undefined, curve);
           logger.info("ika_cache_warmup_protocol_params_done", { curve: String(curve) });
         } catch (err) {
@@ -197,6 +226,7 @@ export async function warmUpSdkCaches(ikaClient: any): Promise<void> {
           logger.warn("ika_cache_warmup_protocol_params_failed", {
             curve: String(curve),
             error: err instanceof Error ? err.message : String(err),
+            errorChain: extractErrorChain(err),
           });
         }
       }
@@ -207,6 +237,7 @@ export async function warmUpSdkCaches(ikaClient: any): Promise<void> {
     // Non-fatal — warm-up is best-effort. The DKG flow has its own retries.
     logger.warn("ika_cache_warmup_failed", {
       error: err instanceof Error ? err.message : String(err),
+      errorChain: extractErrorChain(err),
     });
   }
 }
@@ -227,7 +258,7 @@ export function sleep(ms: number): Promise<void> {
 // refactoring is transparent to consumers.
 // ---------------------------------------------------------------------------
 
-export { getErrorMessage, isRateLimitedError, isTransientNetworkFetchError } from "./errors";
+export { getErrorMessage, isRateLimitedError, isTransientNetworkFetchError, extractErrorChain } from "./errors";
 
 export {
   invalidateEncryptionKeyCache as invalidateClientEncryptionKeyCache,

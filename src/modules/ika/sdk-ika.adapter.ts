@@ -38,7 +38,7 @@ import {
   getInitializedIkaClientContext,
   resetIkaClientContext,
 } from "./ika.client";
-import { getErrorMessage, isTransientNetworkFetchError, isRateLimitedError } from "./errors";
+import { getErrorMessage, isTransientNetworkFetchError, isRateLimitedError, extractErrorChain } from "./errors";
 import {
   invalidateEncryptionKeyCache,
   invalidateProtocolParamsCache,
@@ -121,8 +121,18 @@ async function getCachedOrFetchProtocolParams(
 
   // Step 3: Cache miss — fetch from network (this calls fetchEncryptionKeysFromNetwork).
   logger.info("protocol_params_cache_miss", { encryptionKeyId, curve: String(sdkCurve) });
-  const params = await ikaClient.getProtocolPublicParameters(undefined, sdkCurve);
-  return { protocolPublicParameters: params, encryptionKeyId };
+  try {
+    const params = await ikaClient.getProtocolPublicParameters(undefined, sdkCurve);
+    return { protocolPublicParameters: params, encryptionKeyId };
+  } catch (error) {
+    logger.error("protocol_params_fetch_failed", {
+      encryptionKeyId,
+      curve: String(sdkCurve),
+      error: error instanceof Error ? error.message : String(error),
+      errorChain: extractErrorChain(error),
+    });
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -235,6 +245,7 @@ export class SdkIkaAdapter implements IkaAdapter {
           attempt, retryable, is429,
           error: error instanceof Error ? error.message : String(error),
           cause: error instanceof Error && error.cause ? getErrorMessage(error.cause) : undefined,
+          errorChain: extractErrorChain(error),
         });
 
         if (!retryable || attempt === MAX_DKG_ATTEMPTS) {
