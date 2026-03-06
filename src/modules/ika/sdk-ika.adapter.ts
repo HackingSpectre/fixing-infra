@@ -302,7 +302,7 @@ export class SdkIkaAdapter implements IkaAdapter {
     const ikaCoin = transaction.object(ikaCoinObjectId);
     const [suiCoin] = transaction.splitCoins(transaction.gas, [env.IKA_FEE_SUI_AMOUNT_MIST]);
 
-    await ikaTransaction.requestDWalletDKGWithPublicUserShare({
+    const dkgRequestResult = await ikaTransaction.requestDWalletDKGWithPublicUserShare({
       publicKeyShareAndProof: dkgRequestInput.userDKGMessage,
       publicUserSecretKeyShare: dkgRequestInput.userSecretKeyShare,
       userPublicOutput: dkgRequestInput.userPublicOutput,
@@ -312,6 +312,10 @@ export class SdkIkaAdapter implements IkaAdapter {
       suiCoin,
       sessionIdentifier: ikaTransaction.registerSessionIdentifier(sessionIdentifierBytes),
     });
+
+    // The DKG move call returns owned capability-like values. Consume the
+    // primary returned object in the PTB to avoid UnusedValueWithoutDrop.
+    transaction.transferObjects([dkgRequestResult[0]], signerAddress);
 
     logStep(walletId, curve, correlationId, "5/7 submit_transaction");
     const executeResult = await executeTransaction(suiClient, signerKeypair, transaction);

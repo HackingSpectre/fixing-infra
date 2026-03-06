@@ -65,7 +65,7 @@ The test client is a plain HTML page in `test-client/`. It's just for exercising
 
 ```bash
 cd test-client
-python3 -m http.server 5174 --bind 127.0.0.1
+py -3 -m http.server 5174 --bind 127.0.0.1
 ```
 
 Open **http://localhost:5174**.

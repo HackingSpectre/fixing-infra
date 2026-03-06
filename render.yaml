@@ -1,0 +1,68 @@
+services:
+  - type: web
+    name: deta-infra-api
+    runtime: node
+    rootDir: .
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_URL_DIRECT
+        sync: false
+      - key: DB_SSL_MODE
+        value: require
+      - key: REDIS_URL
+        sync: false
+      - key: QUEUE_MODE
+        value: inline
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: APP_JWT_SECRET
+        sync: false
+      - key: APP_JWT_EXPIRES_IN
+        value: 1h
+      - key: IKA_NETWORK
+        value: testnet
+      - key: IKA_SUI_RPC_URL
+        sync: false
+      - key: IKA_SUI_RPC_URLS
+        sync: false
+      - key: IKA_SIGNER_SECRET_KEY_BASE64
+        sync: false
+      - key: IKA_USER_SHARE_ROOT_SEED_BASE64
+        sync: false
+      - key: IKA_FEE_IKA_COIN_OBJECT_ID
+        sync: false
+      - key: IKA_FEE_IKA_COIN_TYPE
+        value: 0x1f26bb2f711ff82dcda4d02c77d5123089cb7f8418751474b9fb744ce031526a::ika::IKA
+      - key: IKA_FEE_SUI_AMOUNT_MIST
+        value: 1000000
+      - key: IKA_ACTIVE_POLL_INTERVAL_MS
+        value: 1000
+      - key: IKA_ACTIVE_POLL_TIMEOUT_MS
+        value: 60000
+      - key: GAS_SOFT_THRESHOLD_SUI
+        value: 10
+      - key: GAS_SOFT_THRESHOLD_IKA
+        value: 10
+      - key: GAS_HARD_THRESHOLD_SUI
+        value: 1
+      - key: GAS_HARD_THRESHOLD_IKA
+        value: 1
+      - key: LOG_LEVEL
+        value: info
+
+  - type: static_site
+    name: deta-infra-test-client
+    rootDir: .
+    staticPublishPath: test-client
+    pullRequestPreviewsEnabled: false
