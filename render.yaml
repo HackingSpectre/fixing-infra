@@ -61,6 +61,35 @@ services:
       - key: LOG_LEVEL
         value: info
 
+  - type: worker
+    name: ika-snapshot-watcher
+    runtime: node
+    rootDir: .
+    plan: starter
+    buildCommand: npm ci
+    startCommand: npm run start:watcher
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: DB_SSL_MODE
+        value: require
+      - key: IKA_NETWORK
+        value: testnet
+      - key: IKA_SUI_RPC_URL
+        sync: false
+      - key: IKA_SUI_RPC_URLS
+        sync: false
+      - key: SNAPSHOT_NOTIFY_TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: SNAPSHOT_WATCH_MODE
+        value: "true"
+      - key: SNAPSHOT_WORKER_NAME
+        value: ika_snapshot_watcher
+
   - type: static_site
     name: deta-infra-test-client
     rootDir: .

@@ -5,6 +5,7 @@ import {
   jsonb,
   numeric,
   pgEnum,
+  primaryKey,
   pgTable,
   text,
   timestamp,
@@ -126,5 +127,55 @@ export const operationEvents = pgTable(
   },
   (table) => ({
     opTypeIdx: index("operation_events_type_idx").on(table.operationType),
+  }),
+);
+
+export const infraSnapshots = pgTable(
+  "infra_snapshots",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    snapshotType: text("snapshot_type").notNull(),
+    network: text("network").notNull(),
+    rpcUrl: text("rpc_url").notNull(),
+    snapshotHash: text("snapshot_hash").notNull(),
+    keyCount: integer("key_count").notNull(),
+    payload: jsonb("payload").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    snapshotHashUnique: unique("infra_snapshots_hash_unique").on(table.snapshotHash),
+    snapshotTypeCreatedIdx: index("infra_snapshots_type_created_idx").on(table.snapshotType, table.createdAt),
+  }),
+);
+
+export const infraWorkerState = pgTable("infra_worker_state", {
+  workerName: text("worker_name").primaryKey(),
+  consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+  totalAttempts: bigint("total_attempts", { mode: "number" }).notNull().default(0),
+  telegramLastUpdateId: bigint("telegram_last_update_id", { mode: "number" }).notNull().default(0),
+  lastSuccessHash: text("last_success_hash"),
+  lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+  lastNotifiedHash: text("last_notified_hash"),
+  lastNotifiedAt: timestamp("last_notified_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const infraTelegramSubscriptions = pgTable(
+  "infra_telegram_subscriptions",
+  {
+    workerName: text("worker_name").notNull(),
+    chatId: text("chat_id").notNull(),
+    userId: text("user_id"),
+    username: text("username"),
+    firstName: text("first_name"),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: "infra_telegram_subscriptions_pk",
+      columns: [table.workerName, table.chatId],
+    }),
+    workerSeenIdx: index("infra_telegram_subscriptions_worker_seen_idx").on(table.workerName, table.lastSeenAt),
   }),
 );
