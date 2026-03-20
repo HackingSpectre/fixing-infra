@@ -5,7 +5,6 @@ import { ERROR_CODES } from "../../errors/error-codes";
 import type { IkaAdapter } from "../ika/ika.adapter";
 import type { ProvisioningQueuePort } from "../queue/provisioning.queue";
 import { AddressDerivationService } from "./address-derivation.service";
-import { deriveSuiAddress, deriveSolanaAddress } from "./ed25519-addresses";
 import { deriveEvmAddress, deriveBitcoinAddress } from "./secp256k1-addresses";
 import { GasTankService } from "./gas-tank.service";
 import { WalletRepository } from "./repository";
@@ -62,24 +61,11 @@ export class ProvisioningService {
     try {
       await this.gasTankService.preflightAndConsumeForProvisioning();
 
-      // Serialize curve provisioning — ed25519 first, then secp256k1.
-      //
-      // Why not parallel?  Both curves share the same IkaClient singleton.
-      // prepareDKGAsync() internally fetches encryption keys + protocol
-      // params via RPC.  Running both concurrently doubles the RPC calls
-      // hitting the same Sui fullnode, triggering 429 rate-limits.
-      //
-      // By serializing, the first curve populates the SDK's internal caches
-      // (encryption keys + protocol params).  The second curve reads from
-      // cache → zero additional RPC calls for those operations.
-      const ed25519Result = await Promise.allSettled([
-        this.provisionCurve(payload.walletId, "ed25519", payload.correlationId),
-      ]);
       const secp256k1Result = await Promise.allSettled([
         this.provisionCurve(payload.walletId, "secp256k1", payload.correlationId),
       ]);
 
-      const failures = [...ed25519Result, ...secp256k1Result].filter((result) => result.status === "rejected");
+      const failures = secp256k1Result.filter((result) => result.status === "rejected");
 
       if (failures.length > 0) {
         const failureMessages = failures.map((entry) => (entry as PromiseRejectedResult).reason?.message ?? "unknown failure");
@@ -99,7 +85,7 @@ export class ProvisioningService {
       }
 
       const readiness = await this.walletRepository.countReadyComponents(payload.walletId);
-      if (readiness.activeSigners >= 2 && readiness.addresses >= 4) {
+      if (readiness.activeSigners >= 1 && readiness.addresses >= 2) {
         await this.walletRepository.setWalletStatus(payload.walletId, "ready");
         await this.walletRepository.setProvisioningStatus(payload.jobId, "completed");
         logger.info("provisioning_job_completed", {
@@ -164,18 +150,6 @@ export class ProvisioningService {
       publicKeyHex: signer.publicKeyHex,
       state: "active",
     });
-
-    // Derive + persist addresses concurrently within each curve.
-    if (curve === "ed25519") {
-      const suiAddress = deriveSuiAddress(signer.publicKeyHex);
-      const solanaAddress = deriveSolanaAddress(signer.publicKeyHex);
-
-      await Promise.all([
-        this.walletRepository.upsertAddress(walletId, "sui", suiAddress, curve),
-        this.walletRepository.upsertAddress(walletId, "solana", solanaAddress, curve),
-      ]);
-      return;
-    }
 
     const evmAddress = deriveEvmAddress(signer.publicKeyHex);
     const bitcoinAddress = deriveBitcoinAddress(signer.publicKeyHex);

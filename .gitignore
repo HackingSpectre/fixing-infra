@@ -40,3 +40,7 @@ drizzle/meta/
 # Misc
 *.pid
 *.seed
+.agents
+agents
+*.agents
+

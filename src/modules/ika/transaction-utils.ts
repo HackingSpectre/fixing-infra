@@ -112,30 +112,32 @@ export async function resolveIkaCoinObjectId(
   suiClient: any,
   signerAddress: string,
 ): Promise<string> {
-  if (env.IKA_FEE_IKA_COIN_OBJECT_ID && env.IKA_FEE_IKA_COIN_OBJECT_ID.trim().length > 0) {
-    return env.IKA_FEE_IKA_COIN_OBJECT_ID;
-  }
+  return await withRetry(async () => {
+    if (env.IKA_FEE_IKA_COIN_OBJECT_ID && env.IKA_FEE_IKA_COIN_OBJECT_ID.trim().length > 0) {
+      return env.IKA_FEE_IKA_COIN_OBJECT_ID;
+    }
 
-  const coinsResult = await suiClient.getCoins({
-    owner: signerAddress,
-    coinType: env.IKA_FEE_IKA_COIN_TYPE,
-  });
+    const coinsResult = await suiClient.getCoins({
+      owner: signerAddress,
+      coinType: env.IKA_FEE_IKA_COIN_TYPE,
+    });
 
-  const coins = Array.isArray(coinsResult?.data) ? coinsResult.data : [];
-  const usable = coins.find((coin: { coinObjectId?: unknown; balance?: unknown }) => {
-    if (typeof coin?.coinObjectId !== "string") return false;
-    return hasPositiveBalance(coin.balance);
-  });
+    const coins = Array.isArray(coinsResult?.data) ? coinsResult.data : [];
+    const usable = coins.find((coin: { coinObjectId?: unknown; balance?: unknown }) => {
+      if (typeof coin?.coinObjectId !== "string") return false;
+      return hasPositiveBalance(coin.balance);
+    });
 
-  if (!usable || typeof usable.coinObjectId !== "string") {
-    throw new AppError(
-      ERROR_CODES.SPONSOR_BALANCE_LOW,
-      `No usable IKA coin object found for signer address (${signerAddress})`,
-      503,
-    );
-  }
+    if (!usable || typeof usable.coinObjectId !== "string") {
+      throw new AppError(
+        ERROR_CODES.SPONSOR_BALANCE_LOW,
+        `No usable IKA coin object found for signer address (${signerAddress})`,
+        503,
+      );
+    }
 
-  return usable.coinObjectId;
+    return usable.coinObjectId;
+  }, 5, 2000, "resolveIkaCoinObjectId");
 }
 
 // ---------------------------------------------------------------------------
@@ -150,7 +152,7 @@ export async function executeTransaction(
   signerKeypair: any,
   transaction: any,
 ): Promise<any> {
-  return suiClient.signAndExecuteTransaction({
+  return await withRetry(() => suiClient.signAndExecuteTransaction({
     signer: signerKeypair,
     transaction,
     options: {
@@ -158,7 +160,7 @@ export async function executeTransaction(
       showObjectChanges: true,
       showEvents: true,
     },
-  });
+  }), 3, 2000, "executeTransaction");
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +174,10 @@ export function toSdkCurve(sdk: Record<string, any>, curve: Curve): any {
   if (!sdk.Curve) {
     throw new Error("SDK Curve enum not available");
   }
-  return curve === "ed25519" ? sdk.Curve.ED25519 : sdk.Curve.SECP256K1;
+  if (curve !== "secp256k1") {
+    throw new Error(`Unsupported curve: ${curve}`);
+  }
+  return sdk.Curve.SECP256K1;
 }
 
 // ---------------------------------------------------------------------------
@@ -190,4 +195,20 @@ function hasPositiveBalance(raw: unknown): boolean {
     }
   }
   return false;
+}
+
+/** Utility to retry failing block fetching mechanisms natively over Sui RPC. */
+async function withRetry<T>(fn: () => Promise<T>, attempts: number, baseDelay: number, name: string): Promise<T> {
+  let lastError: any;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (i < attempts) {
+        await new Promise(r => setTimeout(r, baseDelay * i));
+      }
+    }
+  }
+  throw new Error(`Failed to execute ${name} after ${attempts} attempts: ${lastError?.message || lastError}`);
 }

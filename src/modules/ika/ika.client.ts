@@ -18,6 +18,7 @@ import { env } from "../../config/env";
 import { logger } from "../../config/logger";
 import { getErrorMessage, isTransientNetworkFetchError, extractErrorChain } from "./errors";
 import { getRpcCandidates } from "./rpc";
+import { readFromDiskCache, writeToDiskCache } from "./disk-cache";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -111,16 +112,6 @@ export async function getInitializedIkaClientContext(options?: {
             network: env.IKA_NETWORK,
           });
 
-          // Cooldown after init — the SDK's initialize() already made
-          // several RPC calls (getObjects, listDynamicFields × 2, getObjects).
-          // Jumping straight into warm-up causes a burst that triggers 429.
-          await sleep(3_000);
-
-          // Pre-warm encryption keys + protocol params for both curves.
-          // This populates the SDK's internal caches so the first DKG
-          // flow reads from memory instead of making live RPC calls.
-          await warmUpSdkCaches(ikaClient);
-
           return { ikaClient, suiClient, rpcUrl };
         } catch (error) {
           lastError = error;
@@ -157,74 +148,137 @@ export async function getInitializedIkaClientContext(options?: {
 
 /**
  * Pre-populate the SDK's internal caches with encryption keys and protocol
- * public parameters for both curves (SECP256K1 + ED25519).
+ * public parameters for SECP256K1.
  *
  * Why this matters (SDK 0.3.1 bug workaround):
  *   • `getProtocolPublicParameters()` calls `fetchEncryptionKeysFromNetwork()`
  *     directly — a private method that **always hits the network**, bypassing
  *     the dedup-promise guard in `fetchEncryptionKeys()`.  Each call makes
  *     5–10 sequential RPC requests (listDynamicFields + getObject × N).
- *   • Without warm-up, the first DKG flow makes 10–20 RPC calls across two
- *     curves, triggering Sui testnet 429 rate-limits.
- *   • With warm-up: encryption keys + protocol params for both curves are
+ *   • Without warm-up, the first DKG flow can make many RPC calls,
+ *     triggering Sui testnet 429 rate-limits.
+ *   • With warm-up: encryption keys + protocol params for the active curve are
  *     cached.  The DKG adapter calls `getCachedProtocolPublicParameters()`
  *     first and only falls back to the network on a true cache miss.
- *   • We add a 2s delay between the two `getProtocolPublicParameters` calls
- *     to avoid bursting the RPC during warm-up itself.
+ *   • We add a delay before protocol params fetch to avoid bursting the RPC
+ *     during warm-up itself.
  */
 export async function warmUpSdkCaches(ikaClient: any): Promise<void> {
   try {
-    // Step 1: Fetch and cache all encryption keys via the cache-respecting
-    // path (getAllNetworkEncryptionKeys checks cachedEncryptionKeys first).
-    // Retry up to 3 times with increasing backoff if we hit 429.
+    // Step 0: Try reading all encryption keys from disk cache first
+    const diskKeys = await readFromDiskCache("latest-encryption-keys.json");
     let keys: any[] | null = null;
-    for (let attempt = 1; attempt <= 3; attempt += 1) {
-      try {
-        keys = await ikaClient.getAllNetworkEncryptionKeys();
-        break;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        const is429 = msg.includes("429") || msg.includes("Too Many Requests");
-        logger.warn("ika_cache_warmup_encryption_keys_attempt_failed", {
-          attempt,
-          is429,
-          error: msg,
-          errorChain: extractErrorChain(err),
-        });
-        if (attempt === 3 || !is429) throw err;
-        // Increasing backoff: 4s, 8s
-        await sleep(4_000 * attempt);
-        // Clear the SDK's failed promise so the next call retries
-        if (typeof ikaClient.invalidateEncryptionKeyCache === "function") {
-          ikaClient.invalidateEncryptionKeyCache();
+    let cacheHit = false;
+
+    if (diskKeys && Array.isArray(diskKeys) && diskKeys.length > 0) {
+       logger.info("ika_cache_warmup_keys_from_disk_cache", { keyCount: diskKeys.length });
+       if (typeof ikaClient.setNetworkEncryptionKeysInCache === "function") {
+         ikaClient.setNetworkEncryptionKeysInCache(diskKeys);
+       }
+       keys = diskKeys;
+       cacheHit = true;
+    }
+
+    // Step 1: Fetch and cache all encryption keys via the cache-respecting path if disk cache failed
+    if (!cacheHit) {
+      for (let attempt = 1; attempt <= 10; attempt += 1) {
+        try {
+          keys = await ikaClient.getAllNetworkEncryptionKeys();
+          break;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const is429 = msg.includes("429") || msg.includes("Too Many Requests");
+          logger.warn("ika_cache_warmup_encryption_keys_attempt_failed", {
+            attempt,
+            is429,
+            error: msg,
+            errorChain: extractErrorChain(err),
+          });
+          if (attempt === 10 || !is429) throw err;
+          // Increasing backoff: 4s, 8s
+          await sleep(4_000 * attempt);
+          // Clear the SDK's failed promise so the next call retries
+          if (typeof ikaClient.invalidateEncryptionKeyCache === "function") {
+            ikaClient.invalidateEncryptionKeyCache();
+          }
         }
       }
+    }
+
+    if (!cacheHit && keys && keys.length > 0) {
+      await writeToDiskCache("latest-encryption-keys.json", keys);
     }
 
     const keyCount = Array.isArray(keys) ? keys.length : 0;
     logger.info("ika_cache_warmup_encryption_keys_done", { keyCount });
 
-    // Step 2: Pre-fetch protocol public parameters for both curves.
-    // NOTE: getProtocolPublicParameters WILL hit the network on the first
-    // call for each curve (SDK bug — bypasses enc-key cache).  But after
-    // this warm-up, getCachedProtocolPublicParameters() returns instantly.
+    // Step 2: Pre-fetch protocol public parameters for SECP256K1.
+    // First check disk cache — if we already saved params from a previous
+    // successful run, load them directly into the SDK's memory cache and
+    // skip the network entirely.
     const sdk = (await import("@ika.xyz/sdk")) as Record<string, any>;
     const Curve = sdk.Curve;
 
-    if (Curve) {
-      const curves = [Curve.SECP256K1, Curve.ED25519].filter(Boolean);
+    if (Curve && keys && keys.length > 0) {
+      const latestKey = keys[keys.length - 1];
+      const encryptionKeyId: string = latestKey.id;
+      const curves = [Curve.SECP256K1].filter(Boolean);
+
       for (let i = 0; i < curves.length; i += 1) {
         const curve = curves[i];
+        const curveString = String(curve);
+        const diskFilename = `protocol-params-${encryptionKeyId}-${curveString}.json`;
+
         try {
-          // Delay before EVERY curve (including the first) — the encryption
-          // key fetch above already made many RPC calls.
-          await sleep(3_000);
-          await ikaClient.getProtocolPublicParameters(undefined, curve);
-          logger.info("ika_cache_warmup_protocol_params_done", { curve: String(curve) });
+          // Try disk cache first
+          const diskParams = await readFromDiskCache(diskFilename);
+          if (diskParams && diskParams instanceof Uint8Array) {
+            logger.info("ika_cache_warmup_protocol_params_from_disk", { curve: curveString, encryptionKeyId });
+
+            // Inject into SDK memory cache so getCachedProtocolPublicParameters() returns instantly
+            if (typeof ikaClient.setCachedProtocolPublicParameters === "function") {
+              ikaClient.setCachedProtocolPublicParameters(encryptionKeyId, curve, diskParams);
+            }
+            continue; // Skip network fetch for this curve
+          }
+
+          // Disk cache miss — fetch from network with retries and save to disk.
+          // This only happens once ever (first run). After that, disk cache takes over.
+          let params: any = null;
+          for (let pAttempt = 1; pAttempt <= 5; pAttempt++) {
+            try {
+              // Backoff: 429 rate-limits get longer cooldowns, timeouts get shorter ones
+              const fetchIs429Previous = pAttempt > 1; // only relevant after first failure
+              const preDelay = pAttempt === 1 ? 3_000 : (fetchIs429Previous ? 10_000 * pAttempt : 5_000 * pAttempt);
+              await sleep(preDelay);
+              logger.info("ika_cache_warmup_protocol_params_fetching", { curve: curveString, attempt: pAttempt });
+              params = await ikaClient.getProtocolPublicParameters(undefined, curve);
+              break;
+            } catch (fetchErr) {
+              const fetchMsg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+              const fetchIs429 = fetchMsg.includes("429") || fetchMsg.includes("Too Many Requests");
+              const isTransient = isTransientNetworkFetchError(fetchErr);
+              logger.warn("ika_cache_warmup_protocol_params_attempt_failed", {
+                curve: curveString, attempt: pAttempt, is429: fetchIs429, isTransient, error: fetchMsg,
+                errorChain: extractErrorChain(fetchErr),
+              });
+              // Retry on ANY transient error (timeouts, connection resets, 429s)
+              // Only give up on non-transient errors or after all attempts exhausted
+              if (pAttempt === 5 || !isTransient) throw fetchErr;
+            }
+          }
+
+          if (params) {
+            logger.info("ika_cache_warmup_protocol_params_done", { curve: curveString });
+
+            // Persist to disk so future restarts skip the network entirely
+            await writeToDiskCache(diskFilename, params);
+            logger.info("ika_cache_warmup_protocol_params_saved_to_disk", { curve: curveString, encryptionKeyId });
+          }
         } catch (err) {
           // Non-fatal — the DKG adapter has its own cache-first + fallback logic.
           logger.warn("ika_cache_warmup_protocol_params_failed", {
-            curve: String(curve),
+            curve: curveString,
             error: err instanceof Error ? err.message : String(err),
             errorChain: extractErrorChain(err),
           });

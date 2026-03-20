@@ -19,6 +19,7 @@ import {
   isTransientNetworkFetchError,
   extractErrorChain,
 } from "./errors";
+import { readFromDiskCache, writeToDiskCache } from "./disk-cache";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -113,6 +114,8 @@ export async function fetchLatestEncryptionKeyResilient(
 
   let lastError: unknown;
 
+  const diskFilename = 'latest-encryption-keys.json';
+
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     // On retries, invalidate only the encryption-key cache (not protocol
     // params — those are expensive to re-fetch and keyed separately).
@@ -120,7 +123,27 @@ export async function fetchLatestEncryptionKeyResilient(
       invalidateEncryptionKeyCache(ikaClient);
     }
 
-    // --- Primary path: getLatestNetworkEncryptionKey ---
+    // --- Step 0: ALWAYS check disk cache first (every attempt, not just attempt 1) ---
+    const diskKeys = await readFromDiskCache(diskFilename);
+    if (diskKeys && Array.isArray(diskKeys) && diskKeys.length > 0) {
+      const candidate = diskKeys[diskKeys.length - 1];
+      if (candidate?.id) {
+        logger.info("encryption_keys_from_disk_cache", {
+          keyCount: diskKeys.length,
+          attempt,
+        });
+
+        // Re-warm the SDK memory cache so downstream SDK calls don't hit network
+        if (typeof ikaClient.setNetworkEncryptionKeysInCache === "function") {
+          ikaClient.setNetworkEncryptionKeysInCache(diskKeys);
+        }
+
+        return candidate;
+      }
+    }
+
+    // --- Disk cache empty — fall back to network ---
+    // Primary path: getLatestNetworkEncryptionKey
     try {
       const latest = await ikaClient.getLatestNetworkEncryptionKey();
       if (latest?.id) {
@@ -143,7 +166,6 @@ export async function fetchLatestEncryptionKeyResilient(
         break;
       }
 
-      // 429 gets a longer cooldown to let rate-limit window expire.
       const backoff = is429
         ? RATE_LIMIT_BACKOFF_MS * attempt
         : baseDelay * attempt;
@@ -151,11 +173,14 @@ export async function fetchLatestEncryptionKeyResilient(
       continue;
     }
 
-    // --- Fallback path: getAllNetworkEncryptionKeys → pick last ---
+    // Fallback path: getAllNetworkEncryptionKeys → pick last
     try {
       invalidateEncryptionKeyCache(ikaClient);
       const allKeys = await ikaClient.getAllNetworkEncryptionKeys();
       if (Array.isArray(allKeys) && allKeys.length > 0) {
+        // Persist to disk so future calls never hit network
+        await writeToDiskCache(diskFilename, allKeys);
+
         const candidate = allKeys[allKeys.length - 1];
         if (candidate?.id) {
           return candidate;

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "skills": {
+    "ika-move": {
+      "source": "dwallet-labs/ika",
+      "sourceType": "github",
+      "computedHash": "f48bdd32d78f817611b242d030f644e06e149dabafebc142950bef3f4178591e"
+    },
+    "ika-sdk": {
+      "source": "dwallet-labs/ika",
+      "sourceType": "github",
+      "computedHash": "a232083243bf976de4b106ffab013797c8d176d085a22793277949de775bdc7b"
+    }
+  }
+}

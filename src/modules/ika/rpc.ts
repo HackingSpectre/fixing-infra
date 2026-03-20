@@ -47,13 +47,16 @@ const DEFAULTS_BY_NETWORK: Readonly<Record<"testnet" | "mainnet", readonly strin
  */
 function priorityOf(url: string): number {
   if (url === env.IKA_SUI_RPC_URL) {
-    return 0;
+    return 0; // Primary configuration
   }
 
-  if (
-    (env.IKA_NETWORK === "testnet" && url.includes("fullnode.testnet.sui.io")) ||
-    (env.IKA_NETWORK === "mainnet" && url.includes("fullnode.mainnet.sui.io"))
-  ) {
+  // Demote the official Mysten fullnode in testnet to rank 3 because of frequent 429 rate limit
+  if (env.IKA_NETWORK === "testnet" && url.includes("fullnode.testnet.sui.io")) {
+    return 3;
+  }
+
+  // But keep mainnet official highly ranked if available
+  if (env.IKA_NETWORK === "mainnet" && url.includes("fullnode.mainnet.sui.io")) {
     return 1;
   }
 
@@ -61,7 +64,7 @@ function priorityOf(url: string): number {
     return 2;
   }
 
-  return 3;
+  return 1; // Uncategorized nodes in IKA_SUI_RPC_URLS get high rank so they are favored over Mysten
 }
 
 // ---------------------------------------------------------------------------
